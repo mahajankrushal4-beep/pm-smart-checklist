@@ -1,22 +1,22 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, send_file
 import sqlite3
-from werkzeug.security import generate_password_hash, check_password_hash
+import os
 from datetime import datetime
+import openpyxl
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = "pm_secret_key"
 
-DATABASE = "database.db"
-
+DB_PATH = "pm.db"
 
 # ---------------- DATABASE INIT ----------------
 
 def init_db():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
         password TEXT,
@@ -25,14 +25,14 @@ def init_db():
     """)
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS machines (
+    CREATE TABLE IF NOT EXISTS machines(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE
     )
     """)
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS checklists (
+    CREATE TABLE IF NOT EXISTS checklists(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         machine TEXT,
         question TEXT
@@ -40,61 +40,50 @@ def init_db():
     """)
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS records (
+    CREATE TABLE IF NOT EXISTS records(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         machine TEXT,
+        date TEXT,
         question TEXT,
         status TEXT,
-        remarks TEXT,
-        date TEXT,
-        record_id TEXT,
-        user TEXT
+        remarks TEXT
     )
     """)
 
-    # create master user if not exists
-    c.execute("SELECT * FROM users WHERE username=?", ("master",))
+    # default master user
+    c.execute("SELECT * FROM users WHERE username='master'")
     if not c.fetchone():
-        c.execute("INSERT INTO users VALUES (NULL,?,?,?)",
-                  ("master",
-                   generate_password_hash("master123"),
-                   "MASTER"))
+        c.execute("INSERT INTO users VALUES(NULL,'master','master123','MASTER')")
 
     conn.commit()
     conn.close()
 
 init_db()
 
-
 # ---------------- LOGIN ----------------
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET","POST"])
 def login():
 
-    if request.method == "POST":
+    if request.method=="POST":
 
-        username = request.form["username"]
-        password = request.form["password"]
+        username=request.form["username"]
+        password=request.form["password"]
 
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
+        conn=sqlite3.connect(DB_PATH)
+        c=conn.cursor()
 
-        c.execute("SELECT * FROM users WHERE username=?", (username,))
-        user = c.fetchone()
+        c.execute("SELECT role FROM users WHERE username=? AND password=?",(username,password))
+        user=c.fetchone()
 
         conn.close()
 
-        if user and check_password_hash(user[2], password):
-
-            session["user"] = user[1]
-            session["role"] = user[3]
-
+        if user:
+            session["user"]=username
+            session["role"]=user[0]
             return redirect("/dashboard")
 
-        flash("Invalid login")
-
     return render_template("login.html")
-
 
 # ---------------- DASHBOARD ----------------
 
@@ -105,136 +94,124 @@ def dashboard():
         return redirect("/")
 
     return render_template("dashboard.html",
-                           role=session["role"],
-                           user=session["user"])
-
-
-# ---------------- USER MANAGEMENT ----------------
-
-@app.route("/users", methods=["GET", "POST"])
-def users():
-
-    if session.get("role") != "MASTER":
-        return redirect("/dashboard")
-
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-
-    if request.method == "POST":
-
-        username = request.form["username"]
-        password = generate_password_hash(request.form["password"])
-        role = request.form["role"]
-
-        c.execute("INSERT INTO users VALUES(NULL,?,?,?)",
-                  (username, password, role))
-        conn.commit()
-
-    c.execute("SELECT username, role FROM users")
-    users = c.fetchall()
-
-    conn.close()
-
-    return render_template("user_management.html", users=users)
-
-
-# ---------------- ADD MACHINE ----------------
-
-@app.route("/add_machine", methods=["POST"])
-def add_machine():
-
-    if session.get("role") not in ["MASTER", "Admin", "Manager"]:
-        return redirect("/dashboard")
-
-    name = request.form["machine"]
-
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-
-    c.execute("INSERT OR IGNORE INTO machines VALUES(NULL,?)", (name,))
-    conn.commit()
-    conn.close()
-
-    return redirect("/dashboard")
-
+                           user=session["user"],
+                           role=session["role"])
 
 # ---------------- ADD CHECKLIST ----------------
 
-@app.route("/add_checklist", methods=["GET", "POST"])
+@app.route("/add_checklist",methods=["GET","POST"])
 def add_checklist():
 
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
+    if request.method=="POST":
 
-    if request.method == "POST":
+        machine=request.form["machine"]
+        question=request.form["question"]
 
-        machine = request.form["machine"]
-        question = request.form["question"]
+        conn=sqlite3.connect(DB_PATH)
+        c=conn.cursor()
 
-        c.execute("INSERT INTO checklists VALUES(NULL,?,?)",
-                  (machine, question))
+        c.execute("INSERT OR IGNORE INTO machines(name) VALUES(?)",(machine,))
+        c.execute("INSERT INTO checklists(machine,question) VALUES(?,?)",(machine,question))
+
         conn.commit()
+        conn.close()
 
-    c.execute("SELECT name FROM machines")
-    machines = c.fetchall()
-
-    conn.close()
-
-    return render_template("add_checklist.html", machines=machines)
-
+    return render_template("add_checklist.html")
 
 # ---------------- FILL CHECKLIST ----------------
 
-@app.route("/fill", methods=["GET", "POST"])
-def fill():
+@app.route("/fill_checklist",methods=["GET","POST"])
+def fill_checklist():
 
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
+    conn=sqlite3.connect(DB_PATH)
+    c=conn.cursor()
 
-    if request.method == "POST":
+    if request.method=="POST":
 
-        machine = request.form["machine"]
-        question = request.form["question"]
-        status = request.form["status"]
-        remarks = request.form["remarks"]
+        machine=request.form["machine"]
 
-        date = datetime.now().strftime("%d%b%Y").upper()
+        c.execute("SELECT question FROM checklists WHERE machine=?",(machine,))
+        questions=c.fetchall()
 
-        record_id = machine + "_" + date
+        today=datetime.now().strftime("%d%b%Y")
 
-        c.execute("""
-        INSERT INTO records VALUES(NULL,?,?,?,?,?,?,?)
-        """, (machine, question, status, remarks, date,
-              record_id, session["user"]))
+        for q in questions:
+
+            status=request.form.get(q[0]+"_status")
+            remarks=request.form.get(q[0]+"_remarks")
+
+            c.execute("INSERT INTO records(machine,date,question,status,remarks) VALUES(?,?,?,?,?)",
+                      (machine,today,q[0],status,remarks))
 
         conn.commit()
 
     c.execute("SELECT name FROM machines")
-    machines = c.fetchall()
+    machines=c.fetchall()
 
     conn.close()
 
-    return render_template("fill_checklist.html",
-                           machines=machines)
-
+    return render_template("fill_checklist.html",machines=machines)
 
 # ---------------- SHOW DATA ----------------
 
-@app.route("/data")
-def data():
+@app.route("/show_data")
+def show_data():
 
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
+    conn=sqlite3.connect(DB_PATH)
+    c=conn.cursor()
 
-    c.execute("SELECT * FROM records ORDER BY id DESC")
-
-    records = c.fetchall()
+    c.execute("SELECT * FROM records")
+    data=c.fetchall()
 
     conn.close()
 
-    return render_template("show_data.html",
-                           records=records)
+    return render_template("show_data.html",data=data)
 
+# ---------------- USER MANAGEMENT ----------------
+
+@app.route("/user_management",methods=["GET","POST"])
+def user_management():
+
+    if request.method=="POST":
+
+        username=request.form["username"]
+        password=request.form["password"]
+
+        conn=sqlite3.connect(DB_PATH)
+        c=conn.cursor()
+
+        c.execute("INSERT INTO users VALUES(NULL,?,?,?)",(username,password,"USER"))
+
+        conn.commit()
+        conn.close()
+
+    return render_template("user_management.html")
+
+# ---------------- EXPORT EXCEL ----------------
+
+@app.route("/export_excel")
+def export_excel():
+
+    conn=sqlite3.connect(DB_PATH)
+    c=conn.cursor()
+
+    c.execute("SELECT * FROM records")
+    data=c.fetchall()
+
+    conn.close()
+
+    wb=openpyxl.Workbook()
+    ws=wb.active
+
+    ws.append(["Machine","Date","Question","Status","Remarks"])
+
+    for row in data:
+        ws.append(row[1:])
+
+    filename="pm_export.xlsx"
+    wb.save(filename)
+
+    return send_file(filename,as_attachment=True)
 
 # ---------------- LOGOUT ----------------
 
@@ -244,6 +221,7 @@ def logout():
     session.clear()
     return redirect("/")
 
+# ---------------- RUN ----------------
 
-if __name__ == "__main__":
+if __name__=="__main__":
     app.run()
