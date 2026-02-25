@@ -1,0 +1,17 @@
+<h2>Welcome {{user}}</h2>
+
+<h3>Role: {{role}}</h3>
+
+<a href="/add_checklist">Add Checklist</a><br><br>
+
+<a href="/fill">Fill Checklist</a><br><br>
+
+<a href="/data">Show Data</a><br><br>
+
+{% if role == "MASTER" %}
+<a href="/users">User Management</a><br><br>
+{% endif %}
+
+<a href="/export">Export Excel</a><br><br>
+
+<a href="/logout">Logout</a>
